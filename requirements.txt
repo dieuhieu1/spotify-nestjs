@@ -1,0 +1,1143 @@
+# ============================================================
+# MYMUSIC - NESTJS MIGRATION REQUIREMENTS
+# Source: Spring Boot 3.3.5 (Java 17) → NestJS (TypeScript)
+# Original context path: /mymusic | Port: 8080
+# ============================================================
+
+
+# ============================================================
+# SECTION 1: PROJECT SETUP & STACK
+# ============================================================
+
+[SETUP-01] Initialize NestJS project
+  - Framework: NestJS (latest stable)
+  - Language: TypeScript (strict mode)
+  - Runtime: Node.js 20+
+  - Package manager: npm or pnpm
+
+[SETUP-02] Core dependencies
+  - @nestjs/core, @nestjs/common, @nestjs/platform-express
+  - @nestjs/config (for environment variables, replaces Spring @Value)
+  - @nestjs/typeorm + typeorm (replaces Spring Data JPA + Hibernate)
+  - @nestjs/jwt + @nestjs/passport + passport-jwt (replaces Spring Security + OAuth2 Resource Server)
+  - @nestjs/swagger (replaces SpringDoc OpenAPI)
+  - @nestjs/schedule (replaces Spring @Scheduled tasks)
+  - @nestjs/mailer + nodemailer (replaces Spring Mail + Thymeleaf)
+  - class-validator + class-transformer (replaces Jakarta Bean Validation)
+  - bcrypt (replaces Spring BCryptPasswordEncoder)
+  - cloudinary  + multer (upload file) (replaces Cloudinary HTTP44)
+  - mysql2 (replaces MySQL Connector/J)
+  - axios (for VNPay HTTP calls)
+  - uuid (replaces java.util.UUID)
+  - jsonwebtoken (JWT signing/verification with HS512)
+
+[SETUP-03] Database
+  - MySQL 8.0 (same as original)
+  - TypeORM with entity definitions
+  - Synchronize: false in production, use migrations instead
+  - Database name: mymusic
+
+[SETUP-04] Environment variables (.env)
+  - DB_HOST, DB_PORT, DB_USER, DB_PASS, DB_NAME
+  - JWT_SIGNER_KEY, JWT_REFRESH_KEY, JWT_RESET_KEY
+  - JWT_ACCESS_EXPIRY_MINUTES=15
+  - JWT_REFRESH_EXPIRY_DAYS=20
+  - JWT_RESET_EXPIRY_MINUTES=15
+  - CLOUDINARY_NAME, CLOUDINARY_API_KEY, CLOUDINARY_API_SECRET
+  - CLOUDINARY_FOLDER_IMAGE=mymusic/images
+  - CLOUDINARY_FOLDER_VIDEO=mymusic/videos
+  - VNPAY_URL, VNPAY_TMN_CODE, VNPAY_SECRET_KEY, VNPAY_RETURN_URL
+  - MAIL_HOST=smtp.gmail.com
+  - MAIL_PORT=587
+  - MAIL_USER, MAIL_PASS
+  - PORT=8080
+
+[SETUP-05] CORS configuration
+  - Allowed origins: http://localhost:3000, 3001, 5173, 5174
+  - All HTTP methods allowed
+  - All headers allowed
+
+[SETUP-06] Global prefix
+  - Apply global prefix: /mymusic (matches original context path)
+
+[SETUP-07] File upload limits
+  - Max file size: 100MB (multipart)
+  - Use multer for multipart handling
+
+
+# ============================================================
+# SECTION 2: DATABASE ENTITIES
+# ============================================================
+
+[ENTITY-01] User (tbl_user)
+  Columns:
+    - id: bigint, PK, auto-increment
+    - name: varchar
+    - email: varchar, unique, not null
+    - password: varchar, not null (BCrypt)
+    - imageURL: varchar, nullable
+    - dob: date, nullable
+    - createdAt: date, auto-set on insert
+    - updatedAt: date, auto-set on update
+    - premiumStatus: boolean, default false
+    - premiumExpiryDate: date, nullable
+  Relations:
+    - ManyToMany → Role (join table: user_role)
+    - OneToMany → Playlist (as creator)
+    - ManyToMany → Playlist (saved playlists, join table: user_saved_playlist)
+
+[ENTITY-02] Role (tbl_role)
+  Columns:
+    - id: bigint, PK, auto-increment
+    - name: varchar, unique (values: USER, PREMIUM, ADMIN)
+    - description: varchar
+  Relations:
+    - ManyToMany → Permission (join table: role_permission)
+
+[ENTITY-03] Permission (tbl_permission)
+  Columns:
+    - id: bigint, PK, auto-increment
+    - name: varchar, unique
+    - description: varchar
+
+[ENTITY-04] Song (tbl_song)
+  Columns:
+    - id: bigint, PK, auto-increment
+    - name: varchar, unique
+    - description: varchar
+    - duration: double (seconds)
+    - listener: bigint, default 0
+    - imageURL: varchar
+    - fileSongURL: varchar
+    - createdAt: date, auto-set on insert
+    - updatedAt: date, auto-set on update
+  Relations:
+    - ManyToOne → Album (nullable, join column: album_id)
+    - ManyToMany → Artist (join table: song_artist, eager load)
+    - ManyToMany → Playlist (join table: playlist_song, mapped by playlist)
+    - ManyToOne → Genre (join column: genre_id, nullable)
+
+[ENTITY-05] Album (tbl_album)
+  Columns:
+    - id: bigint, PK, auto-increment
+    - name: varchar, unique
+    - description: varchar
+    - totalTracks: int, default 0
+    - follower: bigint, default 0
+    - imageURL: varchar
+    - totalHours: double, default 0
+    - createdAt: date, auto-set on insert
+    - updatedAt: date, auto-set on update
+  Relations:
+    - ManyToMany → Artist (join table: album_artist, eager load)
+    - OneToMany → Song (mapped by song.album, eager load)
+
+[ENTITY-06] Artist (tbl_artist)
+  Columns:
+    - id: bigint, PK, auto-increment
+    - name: varchar, unique
+    - follower: bigint, default 0
+    - imageURL: varchar
+  Relations:
+    - ManyToMany → Song (mapped by song.artists, eager load)
+    - ManyToMany → Album (mapped by album.artists)
+
+[ENTITY-07] Genre (tbl_genre)
+  Columns:
+    - id: bigint, PK, auto-increment
+    - name: varchar, unique
+  Relations:
+    - OneToMany → Song (mapped by song.genre)
+
+[ENTITY-08] Playlist (tbl_playlist)
+  Columns:
+    - id: bigint, PK, auto-increment
+    - title: varchar, unique
+    - description: varchar
+    - totalTracks: int, default 0
+    - follower: bigint, default 0
+    - listener: bigint, default 0
+    - imageURL: varchar
+    - totalHours: double, default 0
+    - createdAt: date, auto-set on insert
+    - updatedAt: date, auto-set on update
+  Relations:
+    - ManyToOne → User (as creator, join column: creator_id)
+    - ManyToMany → Song (join table: playlist_song)
+
+[ENTITY-09] FileEntity (tbl_file)
+  Columns:
+    - id: varchar, PK (Cloudinary public_id)
+    - fileName: varchar
+    - url: varchar
+    - type: varchar (IMAGE | VIDEO)
+    - duration: double, nullable (video duration in seconds)
+
+[ENTITY-10] RefreshToken (tbl_refresh_token)
+  Columns:
+    - id: bigint, PK, auto-increment
+    - refreshToken: text, unique
+    - expiryDate: datetime
+
+[ENTITY-11] InvalidatedToken (tbl_invalidated_token)
+  Columns:
+    - id: varchar, PK (JWT jti UUID)
+    - expiryTime: datetime
+
+[ENTITY-12] ForgotPasswordToken (tbl_forgot_password_token)
+  Columns:
+    - id: bigint, PK, auto-increment
+    - email: varchar
+    - forgotPasswordToken: varchar(1024)
+    - expiryTime: datetime
+
+[ENTITY-13] VerificationCode (tbl_verification_code)
+  Columns:
+    - id: bigint, PK, auto-increment
+    - email: varchar
+    - verificationCode: varchar
+    - expirationTime: bigint (unix timestamp in minutes)
+
+
+# ============================================================
+# SECTION 3: MODULES STRUCTURE
+# ============================================================
+
+[MODULE-01] AppModule (root)
+  - Import all feature modules
+  - ConfigModule (global, load .env)
+  - TypeOrmModule (global database connection)
+  - ScheduleModule.forRoot()
+
+[MODULE-02] AuthModule
+  - AuthController, AuthService
+  - JwtModule (for token generation)
+  - PassportModule (for guards)
+  - Import: UserModule, TokenModule
+
+[MODULE-03] TokenModule
+  - TokenService
+  - JwtModule with HS512 configuration
+  - Import: InvalidatedTokenModule, RefreshTokenModule
+
+[MODULE-04] UserModule
+  - UserController, UserService
+  - UserRepository
+
+[MODULE-05] SongModule
+  - SongController, SongService
+  - SongRepository
+
+[MODULE-06] AlbumModule
+  - AlbumController, AlbumService
+  - AlbumRepository
+
+[MODULE-07] ArtistModule
+  - ArtistController, ArtistService
+  - ArtistRepository
+
+[MODULE-08] GenreModule
+  - GenreController, GenreService
+  - GenreRepository
+
+[MODULE-09] PlaylistModule
+  - PlaylistController, PlaylistService
+  - PlaylistRepository
+
+[MODULE-10] PaymentModule
+  - PaymentController, PaymentService (VNPay)
+
+[MODULE-11] FileModule
+  - FileController, FileService
+  - Multer configuration for multipart upload
+  - Cloudinary integration
+
+[MODULE-12] RoleModule
+  - RoleController, RoleService, RoleRepository
+
+[MODULE-13] PermissionModule
+  - PermissionController, PermissionService, PermissionRepository
+
+[MODULE-14] MailModule
+  - MailService (global)
+  - Nodemailer/NestJS Mailer with Gmail SMTP
+
+[MODULE-15] SearchModule
+  - SearchByPriorityController, SearchByPriorityService
+  - Cross-entity priority search
+
+
+# ============================================================
+# SECTION 4: AUTHENTICATION & SECURITY
+# ============================================================
+
+[AUTH-01] JWT Token Generation
+  - Algorithm: HS512 (HMAC-SHA512)
+  - Access Token payload:
+      sub: user email
+      iss: user name
+      iat: issued at (timestamp)
+      exp: expiry (15 minutes default)
+      scope: space-separated "ROLE_USER CREATE_SONG DELETE_SONG ..."
+      jti: UUID v4 (for blacklist tracking)
+  - Refresh Token payload:
+      Same claims, exp = 20 days
+  - Reset Password Token payload:
+      Same claims, exp = 15 minutes
+
+[AUTH-02] JWT Verification (Custom Decorator/Guard)
+  - Verify HS512 signature
+  - Check token expiration
+  - Check jti against InvalidatedToken table (blacklist)
+  - Throw UNAUTHENTICATED if any check fails
+
+[AUTH-03] Scope/Authority Building
+  - buildScope(user): string
+  - Format: "ROLE_USER ROLE_PREMIUM CREATE_SONG DELETE_SONG ..."
+  - Concat role names with "ROLE_" prefix + permission names
+
+[AUTH-04] JwtAuthGuard
+  - Extends PassportStrategy(Strategy, 'jwt')
+  - Validates token, attaches user to request
+  - Used on protected routes
+
+[AUTH-05] RolesGuard / PermissionsGuard
+  - @Roles('ADMIN') decorator
+  - @Permissions('CREATE_SONG') decorator
+  - Guard checks JWT scope claim
+
+[AUTH-06] Public Routes (no auth required)
+  - POST /v1/auth/login
+  - POST /v1/auth/register
+  - POST /v1/auth/refresh-token
+  - POST /v1/auth/forgot-password
+  - POST /v1/auth/forgot-password/verify-code
+  - POST /v1/auth/forgot-password/reset-password (note: original is change-password path)
+  - POST /v1/auth/logout
+  - POST /v1/payment/vn-pay-callback
+  - GET /v1/search-by-priority
+  - GET /v1/albums, /v1/albums/search
+  - GET /v1/artists, /v1/artists/search
+  - GET /v1/genres, /v1/genres/:id/songs
+  - GET /v1/playlists, /v1/playlists/search
+  - GET /v1/songs, /v1/songs/search
+  - GET /v1/songs/:id, /v1/albums/:id, /v1/artists/:id, /v1/playlists/:id
+  - Swagger docs
+
+[AUTH-07] Password Hashing
+  - Use bcrypt with saltRounds = 10
+  - On register: hash password before storing
+  - On login: compare plain password with hash
+
+[AUTH-08] Refresh Token Storage
+  - Store refresh token string + expiryDate in tbl_refresh_token
+  - On refresh: verify token exists in DB and is not expired
+  - Scheduled cleanup: daily at midnight, delete expired refresh tokens
+
+[AUTH-09] Token Blacklist (Invalidated Tokens)
+  - On logout: store JWT jti + expiry in tbl_invalidated_token
+  - On every request: check jti not in blacklist
+
+
+# ============================================================
+# SECTION 5: API ENDPOINTS
+# ============================================================
+
+[API-01] Auth Endpoints (AuthController) → /v1/auth
+  POST   /login                          → login(AuthRequest) → TokenResponse
+  POST   /register                       → register(RegisterRequest) → TokenResponse
+  POST   /refresh-token                  → refreshToken(RefreshRequest) → TokenResponse
+  POST   /logout                         → logout(TokenRequest) → void         [Auth required]
+  GET    /myInfo                         → getMyInfo() → UserResponse           [Auth required]
+  POST   /change-password                → changePassword(ChangePasswordRequest) [Auth required]
+  POST   /forgot-password                → forgotPassword(EmailRequest) → VerificationCode
+  POST   /forgot-password/verify-code   → verifyCode(VerifyCodeRequest) → ForgotPasswordToken
+  POST   /forgot-password/reset-password → resetPassword(ResetPasswordRequest)
+  GET    /stats                          → getStats() → StatsResponse           [Auth required]
+
+[API-02] User Endpoints (UserController) → /v1/users
+  POST   /                              → createUser(UserRequest) → UserResponse  [Auth]
+  GET    /:id                           → getUserById(id) → UserResponse          [Auth]
+  GET    /                              → getAllUsers(page,size,sort) → PageResponse<UserResponse> [Auth]
+  PUT    /:id                           → updateUser(id, UserUpdateRequest) → UserResponse [Auth]
+  DELETE /:id                           → deleteUser(id) → void                   [Auth]
+  POST   /saved-playlist/:playlistId    → savePlaylist(playlistId) → PlaylistResponse [Auth]
+  GET    /saved-playlists               → getSavedPlaylists(page,size,sort) → PageResponse<PlaylistResponse> [Auth]
+  DELETE /saved-playlist/:playlistId    → removeSavedPlaylist(playlistId) → void  [Auth]
+
+[API-03] Song Endpoints (SongController) → /v1/songs
+  POST   /                              → createSong(SongRequest) → SongResponse  [Auth]
+  GET    /:id                           → getSongById(id) → SongResponse          [Public, increments listener]
+  GET    /                              → getAllSongs(page,size,sort) → PageResponse<SongResponse> [Public]
+  GET    /search                        → searchSongs(page,size,sort,search[]) → PageResponse<SongResponse> [Public]
+  PUT    /:id                           → updateSong(id, SongRequest) → SongResponse [Auth]
+  DELETE /:id                           → deleteSong(id) → void                   [Auth]
+
+[API-04] Playlist Endpoints (PlaylistController) → /v1/playlists
+  POST   /                              → createPlaylist(PlaylistRequest) → PlaylistResponse [Auth]
+  GET    /:id                           → getPlaylistById(id) → PlaylistResponse  [Public, increments follower+listener]
+  GET    /                              → getAllPlaylists(page,size,sort) → PageResponse<PlaylistResponse> [Public]
+  GET    /search                        → searchPlaylists(page,size,sort,search[]) → PageResponse<PlaylistResponse> [Public]
+  PUT    /:id                           → updatePlaylist(id, PlaylistRequest) → PlaylistResponse [Auth]
+  DELETE /:id                           → deletePlaylist(id) → void               [Auth]
+  DELETE /:playlistId/songs/:songId     → removeSongFromPlaylist(playlistId,songId) → void [Auth]
+
+[API-05] Album Endpoints (AlbumController) → /v1/albums
+  POST   /                              → createAlbum(AlbumRequest) → AlbumResponse [Auth]
+  GET    /:id                           → getAlbumById(id) → AlbumResponse         [Public, increments follower]
+  GET    /                              → getAllAlbums(page,size,sort) → PageResponse<AlbumResponse> [Public]
+  GET    /search                        → searchAlbums(page,size,sort,search[]) → PageResponse<AlbumResponse> [Public]
+  PUT    /:id                           → updateAlbum(id, AlbumRequest) → AlbumResponse [Auth]
+  DELETE /:id                           → deleteAlbum(id) → void                   [Auth, also deletes all songs]
+  DELETE /:albumId/songs/:songId        → removeSongFromAlbum(albumId,songId) → void [Auth]
+
+[API-06] Artist Endpoints (ArtistController) → /v1/artists
+  POST   /                              → createArtist(ArtistRequest) → ArtistResponse [Auth]
+  GET    /:id                           → getArtistById(id) → ArtistResponse          [Public, increments follower]
+  GET    /                              → getAllArtists(page,size,sort) → PageResponse<ArtistResponse> [Public]
+  GET    /search                        → searchArtists(page,size,sort,search[]) → PageResponse<ArtistResponse> [Public]
+  PUT    /:id                           → updateArtist(id, ArtistRequest) → ArtistResponse [Auth]
+  DELETE /:id                           → deleteArtist(id) → void                    [Auth]
+
+[API-07] Genre Endpoints (GenreController) → /v1/genres
+  POST   /                              → createGenre(GenreRequest) → GenreResponse  [Auth]
+  GET    /:id                           → getGenreById(id) → GenreResponse           [Public]
+  GET    /                              → getAllGenres() → GenreResponse[]            [Public]
+  GET    /:genreId/songs                → getSongsByGenre(genreId) → SongResponse[]  [Public]
+  PUT    /:id                           → updateGenre(id, GenreRequest) → GenreResponse [Auth]
+  DELETE /:id                           → deleteGenre(id) → void                     [Auth]
+
+[API-08] Payment Endpoints (PaymentController) → /v1/payment
+  GET    /vn-pay                        → createPayment(premiumType) → VNPayResponse [Auth]
+                                          premiumType: "1-month"|"3-month"|"6-month"|"12-month"
+  POST   /vn-pay-callback               → handleCallback(PaymentCallbackRequest) → PremiumResponse [Public]
+  GET    /premium-status                → checkPremiumStatus() → PremiumResponse     [Auth]
+
+[API-09] File Endpoints (FileController) → /v1/files
+  POST   /upload                        → uploadFile(file, fileType) → FileEntity    [Auth]
+                                          fileType: IMAGE | VIDEO
+  GET    /                              → getAllFiles() → FileEntity[]               [Auth]
+  DELETE /:id                           → deleteFile(id) → boolean                  [Auth]
+
+[API-10] Role Endpoints (RoleController) → /v1/roles
+  POST   /                              → createRole(RoleRequest) → RoleResponse     [Auth]
+  GET    /:id                           → getRoleById(id) → RoleResponse             [Auth]
+  GET    /                              → getAllRoles() → RoleResponse[]             [Auth]
+  PUT    /:id                           → updateRole(id, RoleRequest) → RoleResponse [Auth]
+  DELETE /:id                           → deleteRole(id) → void                     [Auth]
+
+[API-11] Permission Endpoints (PermissionController) → /v1/permissions
+  POST   /                              → createPermission(PermissionRequest) → PermissionResponse [Auth]
+  GET    /:id                           → getPermissionById(id) → PermissionResponse               [Auth]
+  GET    /                              → getAllPermissions() → PermissionResponse[]               [Auth]
+  PUT    /:id                           → updatePermission(id, PermissionRequest) → PermissionResponse [Auth]
+  DELETE /:id                           → deletePermission(id) → void                             [Auth]
+
+[API-12] Search Endpoint → /v1/search-by-priority
+  GET    /                              → searchByPriority(query, page, size) → mixed results [Public]
+
+
+# ============================================================
+# SECTION 6: DTOs & VALIDATION
+# ============================================================
+
+[DTO-01] AuthRequest
+  - email: string, @IsEmail, @IsNotEmpty
+  - password: string, @MinLength(6), @IsNotEmpty
+
+[DTO-02] RegisterRequest
+  - name: string, @IsNotEmpty
+  - email: string, @IsEmail, @IsNotEmpty
+  - password: string, @MinLength(6)
+  - confirmPassword: string (must match password - custom validator)
+
+[DTO-03] TokenResponse
+  - accessToken: string
+  - refreshToken: string
+  - authenticated: boolean
+  - email: string
+
+[DTO-04] RefreshRequest
+  - refreshToken: string, @IsNotEmpty
+
+[DTO-05] ChangePasswordRequest
+  - oldPassword: string
+  - newPassword: string
+  - confirmPassword: string (must match newPassword)
+
+[DTO-06] TokenRequest
+  - accessToken: string
+
+[DTO-07] EmailRequest
+  - email: string, @IsEmail
+
+[DTO-08] VerifyCodeRequest
+  - email: string, @IsEmail
+  - verificationCode: string, @IsNotEmpty
+
+[DTO-09] ResetPasswordRequest
+  - forgotPasswordToken: string, @IsNotEmpty
+  - newPassword: string, @MinLength(6)
+  - confirmPassword: string (must match newPassword)
+
+[DTO-10] UserRequest
+  - name: string
+  - email: string, @IsEmail, unique
+  - password: string
+  - dob: Date (ISO format)
+  - imageURL: string
+  - roles: number[] (role IDs)
+  - createdPlaylists: number[] (playlist IDs)
+
+[DTO-11] UserUpdateRequest
+  - name: string, optional
+  - dob: Date, optional
+  - roles: number[], optional
+  - createdPlaylists: number[], optional
+
+[DTO-12] UserResponse
+  - id: number
+  - name: string
+  - email: string
+  - imageURL: string
+  - dob: Date
+  - createdPlaylists: PlaylistResponse[]
+  - savedPlaylistId: number[] (omit if null)
+  - createdAt: Date
+  - updatedAt: Date
+  - roles: RoleResponse[]
+  - premiumStatus: boolean
+  - premiumExpiryDate: Date (omit if null)
+
+[DTO-13] SongRequest
+  - name: string, @IsNotEmpty, unique
+  - description: string
+  - imageURL: string
+  - fileSongURL: string
+  - duration: number
+  - listener: number, default 0
+  - artistIds: number[], @ArrayNotEmpty
+  - genreId: number, optional
+
+[DTO-14] SongResponse
+  - id: number
+  - name: string
+  - description: string
+  - duration: number
+  - listener: number
+  - imageURL: string
+  - fileSongURL: string
+  - createdAt: Date
+  - updatedAt: Date
+  - album: AlbumBasic (nullable)
+  - artists: ArtistBasic[]
+  - genre: GenreResponse (nullable)
+
+[DTO-15] SongBasic
+  - id: number
+  - name: string
+  - duration: number
+  - imageURL: string
+
+[DTO-16] PlaylistRequest
+  - title: string
+  - description: string
+  - imageURL: string
+  - follower: number
+  - listener: number
+  - songIds: number[], @ArrayNotEmpty
+
+[DTO-17] PlaylistResponse
+  - id: number
+  - title: string
+  - description: string
+  - totalTracks: number
+  - follower: number
+  - listener: number
+  - imageURL: string
+  - totalHours: number
+  - createdAt: Date
+  - updatedAt: Date
+  - creator: UserBasic
+  - songs: SongBasic[]
+
+[DTO-18] PlaylistBasic
+  - id: number
+  - title: string
+  - imageURL: string
+
+[DTO-19] AlbumRequest
+  - name: string, @IsNotEmpty, unique
+  - description: string
+  - imageURL: string
+  - artistIds: number[], @ArrayNotEmpty
+  - songIds: number[], @ArrayNotEmpty
+
+[DTO-20] AlbumResponse
+  - id: number
+  - name: string
+  - description: string
+  - totalTracks: number
+  - follower: number
+  - imageURL: string
+  - totalHours: number
+  - createdAt: Date
+  - updatedAt: Date
+  - artists: ArtistBasic[]
+  - songs: SongBasic[]
+
+[DTO-21] AlbumBasic
+  - id: number
+  - name: string
+  - imageURL: string
+
+[DTO-22] ArtistRequest
+  - name: string, @IsNotEmpty, unique
+  - imageURL: string
+
+[DTO-23] ArtistResponse
+  - id: number
+  - name: string
+  - follower: number
+  - imageURL: string
+  - albums: AlbumBasic[]
+  - songs: SongBasic[]
+
+[DTO-24] ArtistBasic
+  - id: number
+  - name: string
+  - imageURL: string
+
+[DTO-25] GenreRequest
+  - name: string, @IsNotEmpty, unique
+
+[DTO-26] GenreResponse
+  - id: number
+  - name: string
+
+[DTO-27] RoleRequest
+  - name: string, unique
+  - description: string
+  - permissionIds: number[]
+
+[DTO-28] RoleResponse
+  - id: number
+  - name: string
+  - description: string
+  - permissions: PermissionResponse[]
+
+[DTO-29] PermissionRequest
+  - name: string, unique
+  - description: string
+
+[DTO-30] PermissionResponse
+  - id: number
+  - name: string
+  - description: string
+
+[DTO-31] VNPayResponse
+  - code: string ("ok")
+  - message: string
+  - paymentUrl: string
+
+[DTO-32] PaymentCallbackRequest
+  - amount: number (in VND cents)
+  - responseCode: string ("00" = success)
+  - (other VNPay callback params)
+
+[DTO-33] PremiumResponse
+  - isPremiumStatus: boolean
+  - expirationDate: Date (nullable)
+
+[DTO-34] StatsResponse
+  - totalUsers: number
+  - totalAlbums: number
+  - totalArtists: number
+  - totalSongs: number
+  - totalPlaylists: number
+
+[DTO-35] PageResponse<T>  (Generic)
+  - page: number (1-indexed)
+  - size: number
+  - totalPages: number
+  - totalItems: number
+  - items: T[]
+
+[DTO-36] ApiResponse<T>  (Global wrapper)
+  - code: number (HTTP status)
+  - message: string
+  - result: T
+
+[DTO-37] UserBasic
+  - id: number
+  - name: string
+  - imageURL: string
+
+
+# ============================================================
+# SECTION 7: BUSINESS LOGIC
+# ============================================================
+
+[BL-01] Registration Flow
+  1. Validate email uniqueness
+  2. Validate password matches confirmPassword
+  3. Hash password with bcrypt (rounds=10)
+  4. Assign default USER role
+  5. Save user to DB
+  6. Generate access token + refresh token
+  7. Save refresh token to DB
+  8. Send welcome email asynchronously
+  9. Return TokenResponse
+
+[BL-02] Login Flow
+  1. Find user by email, throw UNAUTHENTICATED if not found
+  2. Compare password with bcrypt, throw UNAUTHENTICATED if mismatch
+  3. Generate access token + refresh token
+  4. Save refresh token to DB
+  5. Return TokenResponse
+
+[BL-03] Logout Flow
+  1. Verify access token is valid
+  2. Store jti + expiry in InvalidatedToken table (blacklist)
+  3. Return void
+
+[BL-04] Refresh Token Flow
+  1. Verify refresh token signature and expiry
+  2. Check refresh token exists in tbl_refresh_token and not expired
+  3. Get user from sub claim (email)
+  4. Generate new access token
+  5. Return new TokenResponse
+
+[BL-05] Change Password Flow
+  1. Get current user from JWT
+  2. Verify oldPassword matches stored hash
+  3. Validate newPassword == confirmPassword
+  4. Hash new password
+  5. Update user in DB
+  6. Return updated UserResponse
+
+[BL-06] Forgot Password Flow
+  1. Receive email
+  2. Find user by email, throw error if not found
+  3. Generate 6-digit numeric verification code
+  4. Set expiry = current time + 10 minutes (unix timestamp in minutes)
+  5. Save VerificationCode to DB
+  6. Send verification code via email
+  7. Return VerificationCode entity
+
+[BL-07] Verify Code Flow
+  1. Find VerificationCode by email + code
+  2. Check not expired (compare expirationTime with current time in minutes)
+  3. Generate reset password JWT token (15 min expiry)
+  4. Save ForgotPasswordToken to DB (email + token + expiry)
+  5. Return ForgotPasswordToken entity
+
+[BL-08] Reset Password Flow
+  1. Find ForgotPasswordToken by token string
+  2. Verify JWT reset token is valid and not expired
+  3. Validate newPassword == confirmPassword
+  4. Hash new password
+  5. Update user password in DB
+  6. Delete ForgotPasswordToken from DB
+  7. Delete all VerificationCodes for that email
+  8. Return void
+
+[BL-09] Song Counter (Listener)
+  - Every GET /songs/:id increments song.listener by 1
+  - This is a counter for popularity tracking
+
+[BL-10] Album Counter (Follower)
+  - Every GET /albums/:id increments album.follower by 1
+
+[BL-11] Artist Counter (Follower)
+  - Every GET /artists/:id increments artist.follower by 1
+
+[BL-12] Playlist Counters (Follower + Listener)
+  - Every GET /playlists/:id increments both playlist.follower and playlist.listener by 1
+
+[BL-13] Save Playlist (User)
+  - Add playlist to user's savedPlaylists (many-to-many)
+  - Increment playlist.listener by 1
+  - Return PlaylistResponse
+
+[BL-14] Album totalTracks & totalHours
+  - Computed from associated songs
+  - totalTracks = songs.length
+  - totalHours = sum of all song.duration (in hours)
+  - Recalculate on: album create, update, song added/removed
+
+[BL-15] Playlist totalTracks & totalHours
+  - Same calculation pattern as album
+  - Recalculate on: playlist create, update, song added/removed
+
+[BL-16] Song Deletion Cascade
+  - On delete song: remove song from all playlists (many-to-many)
+  - On delete song: update album totalTracks and totalHours if song belonged to album
+
+[BL-17] Playlist Deletion Cascade
+  - On delete playlist: remove playlist from all users' savedPlaylists
+  - On delete playlist: remove playlist-song associations
+
+[BL-18] Album Deletion Cascade
+  - On delete album: delete ALL songs in that album
+
+[BL-19] Artist Deletion Cascade
+  - On delete artist: remove artist from all songs' artist list
+  - On delete artist: remove artist from all albums' artist list
+  - Do NOT delete songs or albums when deleting artist
+
+[BL-20] Premium Payment Flow (VNPay)
+  1. User calls GET /v1/payment/vn-pay?premiumType=1-month
+  2. Get current user from JWT
+  3. Map premiumType to amount:
+       "1-month"  → 30,000 VND
+       "3-month"  → 79,000 VND
+       "6-month"  → 169,000 VND
+       "12-month" → 349,000 VND
+  4. Build VNPay payment params (vnp_Amount, vnp_TxnRef, etc.)
+  5. Sort params alphabetically
+  6. Generate HMAC-SHA512 signature with VNPAY_SECRET_KEY
+  7. Build redirect URL
+  8. Return VNPayResponse { code: "ok", paymentUrl: "..." }
+
+[BL-21] VNPay Callback Flow
+  1. Receive callback params from VNPay
+  2. If responseCode == "00" (success):
+       a. Get user by email from params or token
+       b. Calculate premiumExpiryDate based on premiumType
+       c. Set user.premiumStatus = true
+       d. Set user.premiumExpiryDate
+       e. Replace user roles with [PREMIUM] role only
+       f. Save user
+       g. Send payment confirmation email
+  3. Return PremiumResponse
+
+[BL-22] Playlist Creator Assignment
+  - On playlist create: automatically set creator = currently authenticated user (from JWT)
+  - Creator cannot be changed after creation
+
+[BL-23] Search Functionality
+  Search format: array of strings like ["name~Rock", "listener>1000", "duration<200"]
+  Operators:
+    ~ : contains (LIKE %value%)
+    > : greater than
+    < : less than
+  Combine with AND logic across criteria
+  Build TypeORM QueryBuilder dynamically from criteria list
+
+[BL-24] Pagination
+  - Default: page=1, size=10, sortBy="id"
+  - Response always includes: page, size, totalPages, totalItems, items
+  - All list endpoints support pagination
+
+[BL-25] Scheduled Task: Refresh Token Cleanup
+  - Cron: daily at midnight (0 0 * * *)
+  - Delete all RefreshToken records where expiryDate < now
+
+[BL-26] Scheduled Task: Premium Expiry Check
+  - Cron: every hour
+  - Find all users where premiumStatus=true AND premiumExpiryDate < today
+  - Set premiumStatus = false
+  - Downgrade role from PREMIUM back to USER
+
+[BL-27] Scheduled Task: Verification Code Cleanup
+  - Cron: every hour
+  - Delete all VerificationCode records where expirationTime < current time in minutes
+
+
+# ============================================================
+# SECTION 8: FILE UPLOAD SERVICE (Cloudinary)
+# ============================================================
+
+[FILE-01] Image Upload
+  - Accepted MIME types: image/jpeg, image/png, image/gif, image/webp
+  - Max size: 10MB
+  - Upload to Cloudinary folder: mymusic/images
+  - Save metadata (public_id, url, fileName, type=IMAGE) to tbl_file
+  - Return FileEntity
+
+[FILE-02] Video/Audio Upload
+  - Accepted MIME types: video/mp4, video/avi, video/mov, video/mkv,
+    audio/mp3, audio/wav, audio/ogg, audio/webm, audio/m4a, audio/aac,
+    audio/flac, audio/mpeg
+  - Max size: 100MB
+  - Upload to Cloudinary folder: mymusic/videos
+  - Extract duration from upload response
+  - Save metadata (public_id, url, fileName, type=VIDEO, duration) to tbl_file
+  - Return FileEntity
+
+[FILE-03] File Deletion
+  - Delete from Cloudinary using public_id
+  - Delete from tbl_file
+  - Return boolean success
+
+[FILE-04] Validation
+  - Reject if file is empty
+  - Reject if MIME type not in accepted list
+  - Reject if file size exceeds limit for type
+
+
+# ============================================================
+# SECTION 9: EMAIL SERVICE
+# ============================================================
+
+[EMAIL-01] Welcome Email (on Registration)
+  - Trigger: after successful user registration
+  - Content: welcome message with user name and email
+  - Use HTML template
+
+[EMAIL-02] Verification Code Email (Forgot Password)
+  - Trigger: when user requests forgot password
+  - Content: 6-digit verification code, expires in 10 minutes
+  - Use HTML template
+
+[EMAIL-03] Payment Confirmation Email
+  - Trigger: after successful VNPay payment callback
+  - Content: payment confirmation with plan details and expiry date
+  - Use HTML template
+
+[EMAIL-04] SMTP Configuration
+  - Host: smtp.gmail.com
+  - Port: 587
+  - Auth: enabled
+  - TLS: enabled (STARTTLS)
+  - Credentials from environment variables
+
+
+# ============================================================
+# SECTION 10: GLOBAL EXCEPTION HANDLING
+# ============================================================
+
+[ERR-01] Global Exception Filter
+  - Catch all exceptions
+  - Return standardized ApiResponse { code, message, result: null }
+
+[ERR-02] Application Exception (AppException equivalent)
+  - Custom exception class with errorCode
+  - errorCode contains: httpStatus + message
+
+[ERR-03] Error Codes (map from Java ErrorCode enum)
+  UNAUTHENTICATED         → 401
+  UNAUTHORIZED            → 403
+  USER_EXISTED            → 400  "User already existed"
+  USER_NOT_EXISTED        → 404  "User not found"
+  EMAIL_EXISTED           → 400  "Email already existed"
+  SONG_EXISTED            → 400  "Song already existed"
+  SONG_NOT_EXISTED        → 404  "Song not found"
+  PLAYLIST_EXISTED        → 400  "Playlist already existed"
+  PLAYLIST_NOT_EXISTED    → 404  "Playlist not found"
+  ALBUM_EXISTED           → 400  "Album already existed"
+  ALBUM_NOT_EXISTED       → 404  "Album not found"
+  ARTIST_EXISTED          → 400  "Artist already existed"
+  ARTIST_NOT_EXISTED      → 404  "Artist not found"
+  GENRE_EXISTED           → 400  "Genre already existed"
+  GENRE_NOT_EXISTED       → 404  "Genre not found"
+  ROLE_NOT_EXISTED        → 404  "Role not found"
+  PERMISSION_NOT_EXISTED  → 404  "Permission not found"
+  PASSWORD_MISMATCH       → 400  "Passwords do not match"
+  INVALID_OLD_PASSWORD    → 400  "Old password is incorrect"
+  INVALID_REFRESH_TOKEN   → 400  "Invalid refresh token"
+  TOKEN_TYPE_INVALID      → 400  "Invalid token type"
+  FORGOT_PASSWORD_TOKEN_NOT_FOUND → 404  "Reset password token not found"
+  INVALID_PREMIUM_TYPE    → 400  "Invalid premium type"
+  EMAIL_SEND_FAILED       → 500  "Failed to send email"
+  FILE_EMPTY              → 400  "File is empty"
+  FILE_TOO_LARGE          → 400  "File size exceeds limit"
+  FILE_TYPE_INVALID       → 400  "Unsupported file type"
+
+[ERR-04] Validation Exception Filter
+  - Catch class-validator ValidationError
+  - Return 400 with field-level error messages
+
+
+# ============================================================
+# SECTION 11: SWAGGER / API DOCUMENTATION
+# ============================================================
+
+[SWAGGER-01] Setup @nestjs/swagger
+  - Title: MyMusic API
+  - Version: 1.0
+  - Bearer Auth scheme (JWT)
+  - Accessible at /swagger-ui (no auth required)
+
+[SWAGGER-02] Decorators on all endpoints
+  - @ApiTags on controllers
+  - @ApiOperation on each method
+  - @ApiResponse for success and error cases
+  - @ApiBearerAuth on protected routes
+  - @ApiBody for request bodies
+  - @ApiQuery for query params
+
+
+# ============================================================
+# SECTION 12: FOLDER STRUCTURE (NestJS)
+# ============================================================
+
+nestjs-mymusic/
+├── src/
+│   ├── app.module.ts
+│   ├── main.ts
+│   ├── common/
+│   │   ├── decorators/        (CurrentUser, Public, Roles, Permissions)
+│   │   ├── filters/           (GlobalExceptionFilter, ValidationFilter)
+│   │   ├── guards/            (JwtAuthGuard, RolesGuard)
+│   │   ├── interceptors/      (ResponseInterceptor - wrap in ApiResponse)
+│   │   ├── pipes/             (ValidationPipe config)
+│   │   └── enums/             (RoleEnum, TokenType, FileType, ErrorCode)
+│   ├── config/
+│   │   ├── database.config.ts
+│   │   ├── jwt.config.ts
+│   │   ├── cloudinary.config.ts
+│   │   ├── mail.config.ts
+│   │   └── vnpay.config.ts
+│   ├── modules/
+│   │   ├── auth/
+│   │   │   ├── auth.module.ts
+│   │   │   ├── auth.controller.ts
+│   │   │   ├── auth.service.ts
+│   │   │   └── strategies/    (jwt.strategy.ts)
+│   │   ├── token/
+│   │   │   ├── token.module.ts
+│   │   │   └── token.service.ts
+│   │   ├── user/
+│   │   │   ├── user.module.ts
+│   │   │   ├── user.controller.ts
+│   │   │   ├── user.service.ts
+│   │   │   └── entities/user.entity.ts
+│   │   ├── song/
+│   │   ├── album/
+│   │   ├── artist/
+│   │   ├── genre/
+│   │   ├── playlist/
+│   │   ├── payment/
+│   │   ├── file/
+│   │   ├── role/
+│   │   ├── permission/
+│   │   ├── mail/
+│   │   └── search/
+│   └── dto/
+│       ├── request/
+│       ├── response/
+│       └── basic/
+├── .env
+├── .env.example
+├── nest-cli.json
+├── package.json
+└── tsconfig.json
+
+
+# ============================================================
+# SECTION 13: MIGRATION NOTES & SPECIAL CONSIDERATIONS
+# ============================================================
+
+[NOTE-01] JWT Algorithm
+  - Spring uses Nimbus JOSE JWT with HS512
+  - NestJS: use jsonwebtoken with algorithm: 'HS512'
+  - Ensure same key format (same JWT_SIGNER_KEY env var)
+
+[NOTE-02] Date Handling
+  - Spring uses LocalDate (date only, no time)
+  - NestJS: use Date type with TypeORM @Column({ type: 'date' })
+  - Serialize as ISO date string (YYYY-MM-DD) in responses
+
+[NOTE-03] Many-to-Many Relationship Management
+  - TypeORM requires explicit cascade settings on ManyToMany
+  - Use cascade: ['insert', 'update'] carefully
+  - Junction tables match exact names from Java: song_artist, album_artist, etc.
+
+[NOTE-04] Counter Increments (Race Condition)
+  - Use TypeORM increment() method for atomic updates
+  - Example: repo.increment({ id }, 'listener', 1)
+  - Do not fetch-then-save for counter updates
+
+[NOTE-05] Transaction Management
+  - Use TypeORM DataSource.transaction() or @Transactional from typeorm-transactional
+  - Required for: registration (save user + save refresh token), payment callback, playlist deletion
+
+[NOTE-06] VNPay Signature
+  - Algorithm: HMAC-SHA512
+  - Node.js: use crypto.createHmac('sha512', secretKey).update(data).digest('hex')
+  - Params must be sorted alphabetically before signing
+
+[NOTE-07] MapStruct Equivalent
+  - No direct equivalent in NestJS
+  - Use class-transformer's plainToInstance()
+  - Or write manual toResponse() methods in services
+
+[NOTE-08] Cloudinary Duration Extraction
+  - When uploading video/audio, Cloudinary returns duration in response
+  - Store as seconds (double)
+
+[NOTE-09] Scope/Authority in JWT
+  - Replicate Spring's scope building: space-separated string
+  - Format: "ROLE_USER ROLE_PREMIUM CREATE_SONG DELETE_SONG ..."
+  - Parse in guard: split by space, check ROLE_ prefix for role, others for permissions
+
+[NOTE-10] Context Path
+  - Original: /mymusic (Spring context path)
+  - NestJS: app.setGlobalPrefix('mymusic')
+
+[NOTE-11] Pagination (1-indexed)
+  - Spring PageResponse uses 1-indexed pages
+  - TypeORM findAndCount uses 0-indexed (skip/take)
+  - Convert: skip = (page - 1) * size
+
+[NOTE-12] Soft Delete
+  - Not used — hard deletes only
+  - Manage cascade manually in service layer
+
+[NOTE-13] Email Templates
+  - Original uses Thymeleaf HTML templates
+  - NestJS: use handlebars or pug templates with @nestjs-modules/mailer
+  - OR use inline HTML strings
+
+[NOTE-14] Database Seed Data
+  - Roles (USER, PREMIUM, ADMIN) and initial permissions need to be seeded
+  - Create a seed script or use TypeORM migrations with data seeds
+
+[NOTE-15] EAGER Loading Equivalent
+  - Spring uses fetch = EAGER on some relations (song.artists, album.artists, album.songs)
+  - TypeORM: use relations: ['artists'] in find options, or eager: true in @ManyToMany
+  - Be careful with N+1 queries — use QueryBuilder with leftJoinAndSelect
+
+[NOTE-16] Search with Specification Pattern
+  - Spring uses JPA Specification (Criteria API)
+  - NestJS TypeORM equivalent: QueryBuilder with dynamic where clauses
+  - Parse search strings ["field~value", "field>value", "field<value"]
+  - Build WHERE conditions accordingly
+
+[NOTE-17] Swagger Availability
+  - Must be accessible without authentication
+  - Path: /swagger-ui (or /api-docs)
+
+[NOTE-18] API Response Wrapping
+  - All responses wrapped in ApiResponse { code, message, result }
+  - Implement NestJS interceptor to wrap responses automatically
+  - On exception, filter returns same structure with null result
+
+
+# ============================================================
+# SECTION 14: TESTING REQUIREMENTS
+# ============================================================
+
+[TEST-01] Unit Tests
+  - Jest (built into NestJS)
+  - Test all service methods with mocked repositories
+  - Cover happy path + error cases for each service
+
+[TEST-02] E2E Tests
+  - Supertest + NestJS testing utilities
+  - Cover all controller endpoints
+  - Use test database (separate DB_NAME_TEST env)
+
+[TEST-03] Priority Test Coverage
+  - AuthService: login, register, logout, refresh, changePassword
+  - TokenService: generateToken, verifyToken, buildScope
+  - PaymentService: createVnPayPayment, updatePremium
+  - All cascade deletion scenarios
+  - Counter increment operations
+
+
+# ============================================================
+# END OF REQUIREMENTS
+# ============================================================
